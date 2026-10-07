@@ -10416,7 +10416,11 @@ namespace {
 
 		// the session may still be paused, in which case
 		// the effective state of the torrent did not change
-		if (paused_before == is_paused()) return;
+		if (paused_before == is_paused())
+		{
+			update_want_tick();
+			return;
+		}
 
 		m_graceful_pause_mode = bool(flags & torrent_handle::graceful_pause);
 
