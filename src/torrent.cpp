@@ -10396,36 +10396,34 @@ namespace {
 		bool const changed = bool(m_paused) != b;
 		m_paused = b;
 
-		// the session may still be paused, in which case
-		// the effective state of the torrent did not change
-		if (paused_before == is_paused())
+		if (paused_before != is_paused())
 		{
-			if (changed)
-			{
-				update_want_tick();
-				update_want_scrape();
-				update_gauge();
-				state_updated();
-			}
-
-			// A hard pause or the last peer's departure finishes graceful pausing
-			// even when the session keeps the effective pause state unchanged.
-			if (is_paused()
-				&& m_graceful_pause_mode
-				&& !(flags & torrent_handle::graceful_pause)
-				&& (b || num_peers() == 0))
-			{
-				m_graceful_pause_mode = false;
-				update_gauge();
-				do_pause();
-			}
+			m_graceful_pause_mode = bool(flags & torrent_handle::graceful_pause);
+			if (b) do_pause();
+			else do_resume();
 			return;
 		}
 
-		m_graceful_pause_mode = bool(flags & torrent_handle::graceful_pause);
+		// Session pause can hide a change to the torrent's own pause flag.
+		if (changed)
+		{
+			update_want_tick();
+			update_want_scrape();
+			update_gauge();
+			state_updated();
+		}
 
-		if (b) do_pause();
-		else do_resume();
+		// A hard pause or the last peer's departure finishes graceful pausing
+		// even when the session keeps the effective pause state unchanged.
+		if (is_paused()
+			&& m_graceful_pause_mode
+			&& !(flags & torrent_handle::graceful_pause)
+			&& (b || num_peers() == 0))
+		{
+			m_graceful_pause_mode = false;
+			update_gauge();
+			do_pause();
+		}
 	}
 
 	void torrent::resume()
