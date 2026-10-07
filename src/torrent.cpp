@@ -10392,34 +10392,33 @@ namespace {
 		if (num_peers() == 0)
 			flags &= ~torrent_handle::graceful_pause;
 
-		if (bool(m_paused) == b)
-		{
-			// there is one special case here. If we are
-			// currently in graceful pause mode, and we just turned into regular
-			// paused mode, we need to actually pause the torrent properly
-			if (is_paused()
-				&& m_graceful_pause_mode == true
-				&& !(flags & torrent_handle::graceful_pause))
-			{
-				m_graceful_pause_mode = false;
-				update_gauge();
-				do_pause();
-			}
-			return;
-		}
-
 		bool const paused_before = is_paused();
-
+		bool const changed = bool(m_paused) != b;
 		m_paused = b;
 
 		// the session may still be paused, in which case
 		// the effective state of the torrent did not change
 		if (paused_before == is_paused())
 		{
-			update_want_tick();
-			update_want_scrape();
-			update_gauge();
-			state_updated();
+			if (changed)
+			{
+				update_want_tick();
+				update_want_scrape();
+				update_gauge();
+				state_updated();
+			}
+
+			// A hard pause or the last peer's departure finishes graceful pausing
+			// even when the session keeps the effective pause state unchanged.
+			if (is_paused()
+				&& m_graceful_pause_mode
+				&& !(flags & torrent_handle::graceful_pause)
+				&& (b || num_peers() == 0))
+			{
+				m_graceful_pause_mode = false;
+				update_gauge();
+				do_pause();
+			}
 			return;
 		}
 
