@@ -1,5 +1,12 @@
 .. image:: docs/img/logo-color-text.png
 
+SynoSoftware fork
+=================
+
+This fork carries TinyTorrent's fix for pause bookkeeping when a session is
+already paused. See `FORK.rst <FORK.rst>`_ for the bug, reproduction steps,
+correction, and verification limits. The badges below describe upstream CI.
+
 .. image:: https://github.com/arvidn/libtorrent/actions/workflows/windows.yml/badge.svg
     :target: https://github.com/arvidn/libtorrent/actions/workflows/windows.yml
 
