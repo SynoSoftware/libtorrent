@@ -7812,11 +7812,26 @@ namespace {
 		}
 	}
 
-	void torrent::post_peer_info()
+	void torrent::post_peer_info(bool include_known)
 	{
 		std::vector<peer_info> v;
 		get_peer_info(&v);
-		alerts().emplace_alert<peer_info_alert>(get_handle(), std::move(v));
+		std::vector<known_peer> known;
+		if (include_known && m_peer_list)
+		{
+			known.reserve(aux::numeric_cast<std::size_t>(m_peer_list->num_peers()));
+			for (auto const* peer : *m_peer_list)
+			{
+#if TORRENT_USE_I2P
+				if (peer->is_i2p_addr) continue;
+#endif
+#if TORRENT_USE_RTC
+				if (peer->is_rtc_addr) continue;
+#endif
+				known.push_back({peer->ip(), peer->peer_source(), bool(peer->seed)});
+			}
+		}
+		alerts().emplace_alert<peer_info_alert>(get_handle(), std::move(v), std::move(known));
 	}
 
 namespace {

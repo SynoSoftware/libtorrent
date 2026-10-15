@@ -906,9 +906,9 @@ namespace libtorrent {
 		sync_call(&aux::torrent::get_peer_info, vp);
 	}
 
-	void torrent_handle::post_peer_info() const
+	void torrent_handle::post_peer_info(bool include_known) const
 	{
-		async_call(&aux::torrent::post_peer_info);
+		async_call(&aux::torrent::post_peer_info, include_known);
 	}
 
 	void torrent_handle::get_download_queue(std::vector<partial_piece_info>& queue) const

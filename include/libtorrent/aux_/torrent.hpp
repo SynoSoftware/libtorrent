@@ -801,7 +801,7 @@ namespace libtorrent::aux {
 #if TORRENT_ABI_VERSION == 1
 		void get_full_peer_list(std::vector<peer_list_entry>* v) const;
 #endif
-		void post_peer_info();
+		void post_peer_info(bool include_known);
 		void get_peer_info(std::vector<peer_info>* v);
 		void get_download_queue(std::vector<partial_piece_info>* queue) const;
 		void post_download_queue();

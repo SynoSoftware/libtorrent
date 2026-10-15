@@ -3292,9 +3292,10 @@ namespace {
 	}
 
 	peer_info_alert::peer_info_alert(aux::stack_allocator& alloc, torrent_handle h
-		, std::vector<lt::peer_info> p)
+		, std::vector<lt::peer_info> p, std::vector<known_peer> known)
 		: torrent_alert(alloc, std::move(h))
 		, peer_info(std::move(p))
+		, known_peers(std::move(known))
 	{}
 
 	std::string peer_info_alert::message() const
