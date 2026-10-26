@@ -13,7 +13,7 @@ bookkeeping.
 This fork keeps the correction in Git so TinyTorrent can build an exact source
 revision and retain it across upstream updates. It is based on upstream
 ``6da363d2994f17c0b3c0450d124cf73a31a73847`` (v2.1.2). The maintained branch is
-``codex/paused-tick``. The pause correction changes only ``src/torrent.cpp``.
+``Synapse/TinyTorrent``. The pause correction changes only ``src/torrent.cpp``.
 No upstream pull request is planned.
 
 Known peer snapshots
