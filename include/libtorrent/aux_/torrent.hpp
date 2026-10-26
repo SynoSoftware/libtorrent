@@ -1144,6 +1144,13 @@ namespace libtorrent::aux {
 		// this is the handler for write failure piece synchronization
 		void on_piece_fail_sync(piece_index_t piece, piece_block b);
 
+		// called when a write fails for a piece that already passed its hash
+		// check and counted as had. With a picker, write_failed() has taken
+		// the piece back, so the file progress is counted again. Without one,
+		// the torrent became a seed before the write, so which pieces are on
+		// disk is unknown, and clear_error() checks all of them.
+		void on_counted_piece_unwritten();
+
 		void add_redundant_bytes(int b, waste_reason reason);
 		void add_failed_bytes(int b);
 
@@ -1928,6 +1935,10 @@ namespace libtorrent::aux {
 		// resume data in m_add_torrent_params, because a disk that does not
 		// answer says nothing about the pieces it holds.
 		std::uint32_t m_check_files_on_clear:1;
+
+		// set when a seed lost a piece it never wrote, so clearing the error
+		// rechecks every piece. See on_counted_piece_unwritten().
+		std::uint32_t m_recheck_on_clear:1;
 
 #if TORRENT_USE_ASSERTS
 		// set to true when torrent is start()ed. It may only be started once

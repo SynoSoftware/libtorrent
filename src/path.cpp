@@ -313,7 +313,8 @@ namespace {
 		if (ec != boost::system::errc::no_such_file_or_directory) return;
 
 		// the root is \\?\C:\ or \\server\share\ or \\?\UNC\server\share\.
-		native_path_string root = convert_to_native_path_string(save_path);
+		native_path_string const native = convert_to_native_path_string(save_path);
+		native_path_string root = native;
 		std::size_t prefix = 0;
 		bool network = false;
 		if (root.compare(0, 8, L"\\\\?\\UNC\\") == 0)
@@ -338,8 +339,26 @@ namespace {
 		else
 			root.resize(end + 1);
 
-		if (GetFileAttributesW(root.c_str()) == INVALID_FILE_ATTRIBUTES)
-			ec.assign(ERROR_DEV_NOT_EXIST, system_category());
+		// a save path that does not exist yet answers through its nearest
+		// existing parent. Checking the path itself, not only the root, also
+		// covers a link or a mapped folder whose target does not answer.
+		native_path_string folder = native;
+		while (folder.size() > root.size() && folder.back() == L'\\')
+			folder.pop_back();
+		for (;;)
+		{
+			if (GetFileAttributesW(folder.c_str()) != INVALID_FILE_ATTRIBUTES) return;
+			DWORD const error = GetLastError();
+			if (folder.size() <= root.size()
+				|| (error != ERROR_FILE_NOT_FOUND && error != ERROR_PATH_NOT_FOUND))
+				break;
+			std::size_t const slash = folder.rfind(L'\\');
+			if (slash == native_path_string::npos || slash < root.size())
+				folder = root;
+			else
+				folder.resize(slash);
+		}
+		ec.assign(ERROR_DEV_NOT_EXIST, system_category());
 #else
 		TORRENT_UNUSED(ec);
 		TORRENT_UNUSED(save_path);

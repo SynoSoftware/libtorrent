@@ -3225,6 +3225,10 @@ namespace {
 			}
 			else
 			{
+				// a piece passes its hash check before its blocks are written,
+				// and then already counts as had
+				bool const counted = !t->has_picker() || t->picker().have_piece(p.piece);
+
 				// if any other peer has a busy request to this block, we need
 				// to cancel it too
 				if (t->has_picker())
@@ -3232,6 +3236,7 @@ namespace {
 					t->cancel_block(block_finished);
 					t->picker().write_failed(block_finished);
 				}
+				if (counted) t->on_counted_piece_unwritten();
 
 				if (t->has_storage())
 				{

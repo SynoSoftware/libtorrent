@@ -128,16 +128,24 @@ that result over the real progress. A rename records the new name without
 renaming the file.
 
 The fork keeps the rule that a missing file has no data, but only while the
-root of the save path answers:
+save path answers:
 
 * ``check_storage_root()`` replaces a missing-file error with
-  ``ERROR_DEV_NOT_EXIST`` when the root (``C:\`` or ``\\server\share\``) does
-  not answer. The stat cache, file opens in the pread and mmap storages, and
-  ``rename_file`` call it, so checks, writes and renames report a disk error.
+  ``ERROR_DEV_NOT_EXIST`` when neither the save path nor its nearest existing
+  parent answers. The walk stops at the root (``C:\`` or
+  ``\\server\share\``), so a save folder not created yet on an answering share
+  still holds files with no data. The stat cache, file opens in the pread and
+  mmap storages, and ``rename_file`` call it, so checks, writes and renames
+  report a disk error.
 * A check of resume data or the setup of a recheck that fails with a torrent
   error runs again when the error clears. A failed check of resume data keeps
   ``m_add_torrent_params``, and ``write_resume_data`` saves its pieces
   unchanged until that check succeeds.
+* The pread storage hashes a piece before it writes its blocks, so the piece
+  already counts as had when a write fails. ``on_counted_piece_unwritten()``
+  then recounts the file progress from the picker, which ``write_failed`` has
+  corrected, so a file is not reported complete while its data is missing. A
+  seed has no picker, so it checks all its files when ``clear_error()`` runs.
 
 Not yet built or tested: TinyTorrent builds the dependencies separately, and
 the change awaits that build and a manual check with a share that is

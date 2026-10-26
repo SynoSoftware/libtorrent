@@ -275,6 +275,7 @@ aux::vector<download_priority_t, piece_index_t> file_to_piece_prio(
 		, m_outstanding_file_priority(false)
 		, m_complete_sent(false)
 		, m_check_files_on_clear(false)
+		, m_recheck_on_clear(false)
 	{
 		TORRENT_ASSERT_PRECOND(!is_complete(m_part_file_dir));
 		// This is stored in 2 bits
@@ -1260,6 +1261,17 @@ aux::vector<download_priority_t, piece_index_t> file_to_piece_prio(
 		}
 	}
 	catch (...) { handle_exception(); }
+
+	void torrent::on_counted_piece_unwritten()
+	{
+		if (has_picker())
+		{
+			m_file_progress.clear();
+			m_file_progress.init(*m_picker, m_torrent_file->layout());
+			return;
+		}
+		m_recheck_on_clear = true;
+	}
 
 	void torrent::on_disk_read_complete(disk_buffer_holder buffer
 		, storage_error const& se
@@ -9915,6 +9927,13 @@ namespace {
 	void torrent::clear_error()
 	{
 		TORRENT_ASSERT(is_single_thread());
+		if (m_recheck_on_clear)
+		{
+			m_recheck_on_clear = false;
+			// clears the error before it starts the check, unless a check is
+			// already queued
+			force_recheck();
+		}
 		if (!m_error) return;
 		bool const checking_files = should_check_files();
 		m_ses.trigger_auto_manage();
