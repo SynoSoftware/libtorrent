@@ -116,6 +116,33 @@ individual-intent and graceful-drain interleavings corrected here, and no new
 upstream regression cases have been added. The latest upstream test binaries
 do not replace TinyTorrent's installed dependency libraries.
 
+Storage that does not answer
+----------------------------
+
+Windows reports a network share or drive that does not answer with
+``ERROR_BAD_NETPATH``, ``ERROR_BAD_NET_NAME`` or ``ERROR_PATH_NOT_FOUND``.
+Boost maps all three to ``no_such_file_or_directory``, and libtorrent treats
+that as a file with no data yet. A check that runs while a share is absent
+therefore finishes at 0% without an error, and the next resume data saves
+that result over the real progress. A rename records the new name without
+renaming the file.
+
+The fork keeps the rule that a missing file has no data, but only while the
+root of the save path answers:
+
+* ``check_storage_root()`` replaces a missing-file error with
+  ``ERROR_DEV_NOT_EXIST`` when the root (``C:\`` or ``\\server\share\``) does
+  not answer. The stat cache, file opens in the pread and mmap storages, and
+  ``rename_file`` call it, so checks, writes and renames report a disk error.
+* A check of resume data or the setup of a recheck that fails with a torrent
+  error runs again when the error clears. A failed check of resume data keeps
+  ``m_add_torrent_params``, and ``write_resume_data`` saves its pieces
+  unchanged until that check succeeds.
+
+Not yet built or tested: TinyTorrent builds the dependencies separately, and
+the change awaits that build and a manual check with a share that is
+disconnected and reconnected.
+
 Maintenance
 -----------
 

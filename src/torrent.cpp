@@ -274,6 +274,7 @@ aux::vector<download_priority_t, piece_index_t> file_to_piece_prio(
 		, m_torrent_initialized(false)
 		, m_outstanding_file_priority(false)
 		, m_complete_sent(false)
+		, m_check_files_on_clear(false)
 	{
 		TORRENT_ASSERT_PRECOND(!is_complete(m_part_file_dir));
 		// This is stored in 2 bits
@@ -2250,6 +2251,12 @@ aux::vector<download_priority_t, piece_index_t> file_to_piece_prio(
 			handle_disk_error("check_resume_data", error);
 			auto_managed(false);
 			pause();
+			if (has_error())
+			{
+				m_check_files_on_clear = true;
+				state_updated();
+				return;
+			}
 		}
 
 		state_updated();
@@ -2551,6 +2558,7 @@ aux::vector<download_priority_t, piece_index_t> file_to_piece_prio(
 		if (error)
 		{
 			handle_disk_error("force_recheck", error);
+			if (has_error()) m_check_files_on_clear = true;
 			return;
 		}
 #ifndef TORRENT_DISABLE_LOGGING
@@ -7616,7 +7624,16 @@ namespace {
 			: piece_index_t(0);
 
 		TORRENT_ASSERT(ret.have_pieces.empty());
-		if (max_piece > piece_index_t(0))
+		if (state() == torrent_status::checking_resume_data && m_add_torrent_params)
+		{
+			// the resume data has not been checked yet, for instance because
+			// its disk did not answer. Saving it unchanged keeps its pieces
+			// for that check.
+			ret.have_pieces = m_add_torrent_params->have_pieces;
+			ret.verified_pieces = m_add_torrent_params->verified_pieces;
+			ret.unfinished_pieces = m_add_torrent_params->unfinished_pieces;
+		}
+		else if (max_piece > piece_index_t(0))
 		{
 			if (is_seed())
 			{
@@ -9911,6 +9928,32 @@ namespace {
 
 		// if the error happened during initialization, try again now
 		if (!m_torrent_initialized && valid_metadata()) init();
+		if (m_check_files_on_clear)
+		{
+			m_check_files_on_clear = false;
+			if (m_storage && !m_abort)
+			{
+				// the stat cache still holds the errors of the failed check
+				m_ses.disk_thread().async_release_files(m_storage);
+				if (m_add_torrent_params)
+				{
+#if TORRENT_USE_ASSERTS
+					TORRENT_ASSERT(m_outstanding_check_files == false);
+					m_outstanding_check_files = true;
+#endif
+					m_ses.disk_thread().async_check_files(m_storage, m_add_torrent_params.get()
+						, {}, [self = shared_from_this()](status_t st, storage_error const& e)
+						{ self->on_resume_data_checked(st, e); });
+				}
+				else
+				{
+					m_ses.disk_thread().async_check_files(m_storage, nullptr
+						, {}, [self = shared_from_this()](status_t st, storage_error const& e)
+						{ self->on_force_recheck(st, e); });
+				}
+				m_ses.deferred_submit_jobs();
+			}
+		}
 		if (!checking_files && should_check_files())
 			start_checking();
 	}

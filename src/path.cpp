@@ -307,6 +307,45 @@ namespace {
 #endif // TORRENT_WINDOWS
 	}
 
+	void check_storage_root(error_code& ec, std::string const& save_path)
+	{
+#ifdef TORRENT_WINDOWS
+		if (ec != boost::system::errc::no_such_file_or_directory) return;
+
+		// the root is \\?\C:\ or \\server\share\ or \\?\UNC\server\share\.
+		native_path_string root = convert_to_native_path_string(save_path);
+		std::size_t prefix = 0;
+		bool network = false;
+		if (root.compare(0, 8, L"\\\\?\\UNC\\") == 0)
+		{
+			prefix = 8;
+			network = true;
+		}
+		else if (root.compare(0, 4, L"\\\\?\\") == 0)
+		{
+			prefix = 4;
+		}
+		else if (root.compare(0, 2, L"\\\\") == 0)
+		{
+			prefix = 2;
+			network = true;
+		}
+		std::size_t end = root.find(L'\\', prefix);
+		if (network && end != native_path_string::npos)
+			end = root.find(L'\\', end + 1);
+		if (end == native_path_string::npos)
+			root += L'\\';
+		else
+			root.resize(end + 1);
+
+		if (GetFileAttributesW(root.c_str()) == INVALID_FILE_ATTRIBUTES)
+			ec.assign(ERROR_DEV_NOT_EXIST, system_category());
+#else
+		TORRENT_UNUSED(ec);
+		TORRENT_UNUSED(save_path);
+#endif
+	}
+
 	void rename(std::string const& inf, std::string const& newf, error_code& ec)
 	{
 		ec.clear();

@@ -71,6 +71,17 @@ namespace libtorrent {
 
 	TORRENT_EXTRA_EXPORT void stat_file(std::string const& f, file_status* s
 		, error_code& ec, file_status_flag_t flags = {});
+
+	// A missing file has no data yet, which a check or a rename may assume.
+	// Windows reports a drive or a network share that does not answer with
+	// the same codes as a missing file. When ``ec`` reports a missing file
+	// and the root of ``save_path`` does not answer either, this replaces it
+	// with ERROR_DEV_NOT_EXIST, so the caller reports a disk error instead.
+	// It touches the disk only for a missing file, and does nothing on other
+	// platforms.
+	TORRENT_EXTRA_EXPORT void check_storage_root(error_code& ec
+		, std::string const& save_path);
+
 	TORRENT_EXTRA_EXPORT void rename(std::string const& f
 		, std::string const& newf, error_code& ec);
 	TORRENT_EXTRA_EXPORT void create_directories(std::string const& f

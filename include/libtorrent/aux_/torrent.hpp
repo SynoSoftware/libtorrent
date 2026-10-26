@@ -1923,6 +1923,12 @@ namespace libtorrent::aux {
 		// prevent us from sending it again to anyone
 		std::uint32_t m_complete_sent:1;
 
+		// set when checking the files failed with a torrent error, so clearing
+		// the error checks them again. A failed check of resume data keeps that
+		// resume data in m_add_torrent_params, because a disk that does not
+		// answer says nothing about the pieces it holds.
+		std::uint32_t m_check_files_on_clear:1;
+
 #if TORRENT_USE_ASSERTS
 		// set to true when torrent is start()ed. It may only be started once
 		bool m_was_started = false;

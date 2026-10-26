@@ -969,6 +969,7 @@ mmap_storage::mmap_storage(storage_params const& params, aux::file_view_pool& po
 		{
 			ec = se;
 			ec.file(file);
+			check_storage_root(ec.ec, m_save_path);
 			TORRENT_ASSERT(ec);
 			return {};
 		}

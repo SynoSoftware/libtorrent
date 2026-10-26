@@ -795,6 +795,7 @@ namespace libtorrent::aux {
 		{
 			ec = se;
 			ec.file(file);
+			check_storage_root(ec.ec, m_save_path);
 			TORRENT_ASSERT(ec);
 			return {};
 		}

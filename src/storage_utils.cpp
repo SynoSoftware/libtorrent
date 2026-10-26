@@ -344,6 +344,7 @@ namespace libtorrent { namespace aux {
 		// recreate it instead of copying its content
 		file_status old_stat;
 		stat_file(old_name, &old_stat, ec.ec, dont_follow_links);
+		check_storage_root(ec.ec, save_path);
 		if (ec.ec == boost::system::errc::no_such_file_or_directory
 			|| ec.ec == boost::system::errc::filename_too_long)
 		{
