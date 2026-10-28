@@ -307,6 +307,78 @@ namespace {
 #endif // TORRENT_WINDOWS
 	}
 
+	void check_storage_root(error_code& ec, std::string const& save_path)
+	{
+#ifdef TORRENT_WINDOWS
+		if (ec != boost::system::errc::no_such_file_or_directory) return;
+
+		// the root is \\?\C:\ or \\server\share\ or \\?\UNC\server\share\.
+		native_path_string const native = convert_to_native_path_string(save_path);
+		native_path_string root = native;
+		std::size_t prefix = 0;
+		bool network = false;
+		if (root.compare(0, 8, L"\\\\?\\UNC\\") == 0)
+		{
+			prefix = 8;
+			network = true;
+		}
+		else if (root.compare(0, 4, L"\\\\?\\") == 0)
+		{
+			prefix = 4;
+		}
+		else if (root.compare(0, 2, L"\\\\") == 0)
+		{
+			prefix = 2;
+			network = true;
+		}
+		std::size_t end = root.find(L'\\', prefix);
+		if (network && end != native_path_string::npos)
+			end = root.find(L'\\', end + 1);
+		if (end == native_path_string::npos)
+			root += L'\\';
+		else
+			root.resize(end + 1);
+
+		// a save path that does not exist yet answers through its nearest
+		// existing parent. Checking the path itself, not only the root, also
+		// covers a link or a mapped folder whose target does not answer.
+		native_path_string folder = native;
+		while (folder.size() > root.size() && folder.back() == L'\\')
+			folder.pop_back();
+		for (;;)
+		{
+			// opening the folder follows a link or junction to its target,
+			// which reading its attributes does not. It asks for no access,
+			// so a folder that refuses access still answers.
+			HANDLE const handle = CreateFileW(folder.c_str(), 0
+				, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr
+				, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+			if (handle != INVALID_HANDLE_VALUE)
+			{
+				CloseHandle(handle);
+				return;
+			}
+			DWORD const error = GetLastError();
+			if (error == ERROR_ACCESS_DENIED) return;
+			// a link that exists but cannot be followed has a target that does
+			// not answer, such as a volume that was removed.
+			if (folder.size() <= root.size()
+				|| (error != ERROR_FILE_NOT_FOUND && error != ERROR_PATH_NOT_FOUND)
+				|| GetFileAttributesW(folder.c_str()) != INVALID_FILE_ATTRIBUTES)
+				break;
+			std::size_t const slash = folder.rfind(L'\\');
+			if (slash == native_path_string::npos || slash < root.size())
+				folder = root;
+			else
+				folder.resize(slash);
+		}
+		ec.assign(ERROR_DEV_NOT_EXIST, system_category());
+#else
+		TORRENT_UNUSED(ec);
+		TORRENT_UNUSED(save_path);
+#endif
+	}
+
 	void rename(std::string const& inf, std::string const& newf, error_code& ec)
 	{
 		ec.clear();

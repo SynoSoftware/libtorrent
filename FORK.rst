@@ -116,6 +116,74 @@ individual-intent and graceful-drain interleavings corrected here, and no new
 upstream regression cases have been added. The latest upstream test binaries
 do not replace TinyTorrent's installed dependency libraries.
 
+Storage that does not answer
+----------------------------
+
+Windows reports a network share or drive that does not answer with
+``ERROR_BAD_NETPATH``, ``ERROR_BAD_NET_NAME`` or ``ERROR_PATH_NOT_FOUND``.
+Boost maps all three to ``no_such_file_or_directory``, and libtorrent treats
+that as a file with no data yet. A check that runs while a share is absent
+therefore finishes at 0% without an error, and the next resume data saves
+that result over the real progress. A rename records the new name without
+renaming the file.
+
+The fork keeps the rule that a missing file has no data, but only while the
+save path answers:
+
+* ``check_storage_root()`` replaces a missing-file error with
+  ``ERROR_DEV_NOT_EXIST`` when neither the save path nor its nearest existing
+  parent answers. The walk stops at the root (``C:\`` or
+  ``\\server\share\``), so a save folder not created yet on an answering share
+  still holds files with no data. It opens each folder instead of reading its
+  attributes, because only opening follows a save path that is a link or
+  junction to its target. A link that exists but cannot be followed, such as
+  one to a removed volume, does not answer. The stat cache, file opens and
+  hash reads in the pread storage, file opens in the mmap storage,
+  ``rename_file``, ``move_storage`` and ``part_file::move_partfile`` call it,
+  so checks, writes, renames and moves report a disk error. ``move_storage``
+  tests both its source and its destination, because a file that either end
+  cannot reach would otherwise count as a missing source and stay behind.
+* The pread storage's ``initialize()`` fails instead of opening a part file
+  from a save path that does not answer, because that part file reads as
+  empty and its first write replaces the pieces it holds.
+  ``set_file_priority()`` reports the error instead of treating such a file as
+  missing.
+* ``check_fastresume`` without resume data reports the error instead of
+  treating ``has_any_file()`` as false, which skipped the check and downloaded
+  existing files again.
+* ``move_storage`` with ``reset_save_path`` or ``reset_save_path_unchecked``
+  succeeds when the destination does not answer, because it moves no files.
+  The first write creates the folder, and the check reports the error.
+* A check of resume data or the setup of a recheck that fails with a torrent
+  error runs again when the error clears. A failed check of resume data keeps
+  ``m_add_torrent_params``, and ``write_resume_data`` saves its pieces
+  unchanged until that check succeeds.
+* The pread storage hashes a piece before it writes its blocks, so the piece
+  already counts as had when a write fails. ``on_counted_piece_unwritten()``
+  then recounts the file progress from the picker, which ``write_failed`` has
+  corrected, so a file is not reported complete while its data is missing,
+  and a torrent that finished with that piece resumes downloading. A seed has
+  no picker, so it checks all its files when ``clear_error()`` runs, and
+  ``write_resume_data`` saves no pieces until then. A ``force_recheck()`` in
+  the meantime is that check, so only one check starts.
+* A piece whose blocks were written but could not be read back for its hash
+  check is cleared and downloaded again, as after a failed write, because
+  nothing hashes a finished piece again.
+* A check that a disk error stops keeps its position at the lowest piece
+  whose hash has not returned, instead of starting again from the first
+  piece. Hash jobs complete out of order, so that piece can be below the one
+  that failed. The reads still in flight belong to the stopped pass, so their
+  completions are ignored and their pieces are hashed again. Clearing the
+  error continues the check there, and resume data saved before then lists
+  the pieces checked before it, so a reloaded torrent continues the check
+  after them. Resume data saved while the check runs ends its checked pieces
+  at the same lowest piece, so a reloaded torrent hashes the pieces that were
+  in flight.
+
+Not yet built or tested: TinyTorrent builds the dependencies separately, and
+the change awaits that build and a manual check with a share that is
+disconnected and reconnected.
+
 Maintenance
 -----------
 

@@ -314,6 +314,7 @@ namespace libtorrent::aux {
 			std::string new_path = combine_path(path, m_name);
 
 			rename(old_path, new_path, ec);
+			check_storage_root(ec, m_path);
 			if (ec == boost::system::errc::no_such_file_or_directory)
 				ec.clear();
 

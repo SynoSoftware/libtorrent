@@ -1465,8 +1465,17 @@ status_t pread_disk_io::do_job(aux::job::check_fastresume& a, aux::pread_disk_jo
 	{
 		// if we don't have any resume data, we still may need to trigger a
 		// full re-check, if there are *any* files.
-		storage_error ignore;
-		return ((j->storage->has_any_file(ignore))
+		storage_error se;
+		bool const any_file = j->storage->has_any_file(se);
+#ifdef TORRENT_WINDOWS
+		// storage that does not answer says nothing about which files exist
+		if (se.ec == error_code(ERROR_DEV_NOT_EXIST, system_category()))
+		{
+			j->error = se;
+			return disk_status::fatal_disk_error | ret_flag;
+		}
+#endif
+		return (any_file
 			? disk_status::need_full_check
 			: status_t{})
 			| ret_flag;

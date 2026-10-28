@@ -182,6 +182,15 @@ namespace libtorrent::aux {
 
 				std::string const fp = fs.file_path(i, m_save_path);
 				bool const file_exists = exists(fp, ec.ec);
+				if (!ec.ec && !file_exists)
+				{
+					// a file on storage that does not answer is not missing
+					ec.ec = boost::system::errc::make_error_code(
+						boost::system::errc::no_such_file_or_directory);
+					check_storage_root(ec.ec, m_save_path);
+					if (ec.ec == boost::system::errc::no_such_file_or_directory)
+						ec.ec.clear();
+				}
 				if (ec.ec)
 				{
 					ec.file(i);
@@ -255,6 +264,17 @@ namespace libtorrent::aux {
 
 			error_code err;
 			auto const size = m_stat_cache.get_filesize(i, fs, m_save_path, err);
+#ifdef TORRENT_WINDOWS
+			// a part file opened from storage that does not answer reads as
+			// empty, and its first write replaces the pieces it holds
+			if (err == error_code(ERROR_DEV_NOT_EXIST, system_category()))
+			{
+				ec.ec = err;
+				ec.file(i);
+				ec.operation = operation_t::file_stat;
+				return ret;
+			}
+#endif
 			if (!err && size > 0)
 			{
 				use_partfile(i, false);
@@ -635,6 +655,8 @@ namespace libtorrent::aux {
 			int ret = pread_all(handle->fd(), scratch_buffer, file_offset, ec.ec);
 			if (ec.ec)
 			{
+				// a check skips a missing file as one with no data
+				check_storage_root(ec.ec, m_save_path);
 				ec.file(file_index);
 				ec.operation = operation_t::file_read;
 				return ret;
@@ -692,6 +714,8 @@ namespace libtorrent::aux {
 		int const ret = pread_all(handle->fd(), b, file_offset, error.ec);
 		if (error.ec)
 		{
+			// a check skips a missing file as one with no data
+			check_storage_root(error.ec, m_save_path);
 			error.operation = operation_t::file_read;
 			error.file(file_index);
 			return ret;
@@ -795,6 +819,7 @@ namespace libtorrent::aux {
 		{
 			ec = se;
 			ec.file(file);
+			check_storage_root(ec.ec, m_save_path);
 			TORRENT_ASSERT(ec);
 			return {};
 		}

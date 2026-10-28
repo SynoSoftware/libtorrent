@@ -274,6 +274,8 @@ aux::vector<download_priority_t, piece_index_t> file_to_piece_prio(
 		, m_torrent_initialized(false)
 		, m_outstanding_file_priority(false)
 		, m_complete_sent(false)
+		, m_check_files_on_clear(false)
+		, m_recheck_on_clear(false)
 	{
 		TORRENT_ASSERT_PRECOND(!is_complete(m_part_file_dir));
 		// This is stored in 2 bits
@@ -1215,6 +1217,7 @@ aux::vector<download_priority_t, piece_index_t> file_to_piece_prio(
 		// as "have" but not yet validated them against the v2 hashes. At
 		// this point, just assume we have no pieces
 		++m_picker_generation;
+		m_hashing_pieces.clear();
 		m_picker.reset();
 		m_hash_picker.reset();
 		m_file_progress.clear();
@@ -1259,6 +1262,23 @@ aux::vector<download_priority_t, piece_index_t> file_to_piece_prio(
 		}
 	}
 	catch (...) { handle_exception(); }
+
+	void torrent::on_counted_piece_unwritten()
+	{
+		if (has_picker())
+		{
+			m_file_progress.clear();
+			m_file_progress.init(*m_picker, m_torrent_file->layout());
+			// the piece may have finished the wanted files, which told peers
+			// that this torrent needs nothing more
+			if (m_state == torrent_status::finished && !is_finished())
+				resume_download();
+			return;
+		}
+		m_recheck_on_clear = true;
+		// resume data then lists no pieces, so a restart checks every file
+		set_need_save_resume(torrent_handle::if_download_progress);
+	}
 
 	void torrent::on_disk_read_complete(disk_buffer_holder buffer
 		, storage_error const& se
@@ -2250,6 +2270,12 @@ aux::vector<download_priority_t, piece_index_t> file_to_piece_prio(
 			handle_disk_error("check_resume_data", error);
 			auto_managed(false);
 			pause();
+			if (has_error())
+			{
+				m_check_files_on_clear = true;
+				state_updated();
+				return;
+			}
 		}
 
 		state_updated();
@@ -2480,6 +2506,8 @@ aux::vector<download_priority_t, piece_index_t> file_to_piece_prio(
 			|| m_state == torrent_status::checking_resume_data)
 			return;
 
+		// this is the recheck that clear_error() would start
+		m_recheck_on_clear = false;
 		clear_error();
 
 		disconnect_all(errors::stopping_torrent, operation_t::bittorrent);
@@ -2496,6 +2524,7 @@ aux::vector<download_priority_t, piece_index_t> file_to_piece_prio(
 		// completion handler must not touch the picker state we're about
 		// to discard.
 		++m_picker_generation;
+		m_hashing_pieces.clear();
 
 		// removing the piece picker will clear the user priorities
 		// instead, just clear which pieces we have
@@ -2551,6 +2580,7 @@ aux::vector<download_priority_t, piece_index_t> file_to_piece_prio(
 		if (error)
 		{
 			handle_disk_error("force_recheck", error);
+			if (has_error()) m_check_files_on_clear = true;
 			return;
 		}
 #ifndef TORRENT_DISABLE_LOGGING
@@ -2640,6 +2670,7 @@ aux::vector<download_priority_t, piece_index_t> file_to_piece_prio(
 			// completion handler inline, before this call even returns.
 			piece_index_t const piece = m_checking_piece;
 			++m_checking_piece;
+			m_hashing_pieces.push_back(piece);
 
 			span<sha256_hash> v2_span(hashes);
 			m_ses.disk_thread().async_hash(m_storage,
@@ -2681,6 +2712,10 @@ aux::vector<download_priority_t, piece_index_t> file_to_piece_prio(
 		if (picker_gen != m_picker_generation)
 			return;
 
+		auto const hashing = std::find(m_hashing_pieces.begin(), m_hashing_pieces.end(), piece);
+		if (hashing != m_hashing_pieces.end())
+			m_hashing_pieces.erase(hashing);
+
 		state_updated();
 
 		++m_num_checked_pieces;
@@ -2710,8 +2745,17 @@ aux::vector<download_priority_t, piece_index_t> file_to_piece_prio(
 			}
 			else
 			{
-				m_checking_piece = piece_index_t{0};
-				m_num_checked_pieces = piece_index_t{0};
+				// the check continues at the lowest piece whose hash has not
+				// returned once the error is cleared, or from resume data saved
+				// before then, instead of reading every piece again. The jobs
+				// still in flight belong to the stopped pass, so their
+				// completions are ignored and their pieces are hashed again.
+				piece_index_t const restart = m_hashing_pieces.empty()
+					? piece : std::min(piece, m_hashing_pieces.front());
+				++m_picker_generation;
+				m_hashing_pieces.clear();
+				m_checking_piece = restart;
+				m_num_checked_pieces = restart;
 				if (m_ses.alerts().should_post<file_error_alert>())
 					m_ses.alerts().emplace_alert<file_error_alert>(error.ec,
 						resolve_filename(error.file()), error.operation, get_handle());
@@ -2845,6 +2889,7 @@ aux::vector<download_priority_t, piece_index_t> file_to_piece_prio(
 			// completion handler inline, before this call even returns.
 			piece_index_t const next_piece = m_checking_piece;
 			++m_checking_piece;
+			m_hashing_pieces.push_back(next_piece);
 
 			span<sha256_hash> v2_span(block_hashes);
 			m_ses.disk_thread().async_hash(m_storage,
@@ -4566,6 +4611,16 @@ namespace {
 
 		if (disk_error)
 		{
+			// the blocks are written but could not be read back, and nothing
+			// hashes a finished piece again, so it is downloaded again
+			if (m_storage)
+			{
+				m_picker->lock_piece(piece);
+				m_ses.disk_thread().async_clear_piece(m_storage, piece
+					, [self = shared_from_this()](piece_index_t const p)
+					{ self->on_piece_fail_sync(p, piece_block::invalid); });
+				m_ses.deferred_submit_jobs();
+			}
 			update_gauge();
 		}
 		else if (passed || v2_passed)
@@ -7609,14 +7664,25 @@ namespace {
 		// we have actually checked. This allows us to resume the checking when we
 		// load this torrent up again. If we have not completed checking nor is
 		// currently checking, don't save any pieces from the have_pieces
-		// bitfield.
+		// bitfield. Hash jobs complete out of order, so the checked range ends
+		// at the lowest piece whose hash has not returned.
 		piece_index_t const max_piece
-			= is_checking ? m_num_checked_pieces
+			= is_checking ? (m_hashing_pieces.empty() ? m_num_checked_pieces
+				: std::min(m_num_checked_pieces, m_hashing_pieces.front()))
 			: m_files_checked ? m_torrent_file->end_piece()
 			: piece_index_t(0);
 
 		TORRENT_ASSERT(ret.have_pieces.empty());
-		if (max_piece > piece_index_t(0))
+		if (state() == torrent_status::checking_resume_data && m_add_torrent_params)
+		{
+			// the resume data has not been checked yet, for instance because
+			// its disk did not answer. Saving it unchanged keeps its pieces
+			// for that check.
+			ret.have_pieces = m_add_torrent_params->have_pieces;
+			ret.verified_pieces = m_add_torrent_params->verified_pieces;
+			ret.unfinished_pieces = m_add_torrent_params->unfinished_pieces;
+		}
+		else if (max_piece > piece_index_t(0) && !m_recheck_on_clear)
 		{
 			if (is_seed())
 			{
@@ -9898,6 +9964,13 @@ namespace {
 	void torrent::clear_error()
 	{
 		TORRENT_ASSERT(is_single_thread());
+		if (m_recheck_on_clear)
+		{
+			m_recheck_on_clear = false;
+			// clears the error before it starts the check, unless a check is
+			// already queued
+			force_recheck();
+		}
 		if (!m_error) return;
 		bool const checking_files = should_check_files();
 		m_ses.trigger_auto_manage();
@@ -9911,6 +9984,32 @@ namespace {
 
 		// if the error happened during initialization, try again now
 		if (!m_torrent_initialized && valid_metadata()) init();
+		if (m_check_files_on_clear)
+		{
+			m_check_files_on_clear = false;
+			if (m_storage && !m_abort)
+			{
+				// the stat cache still holds the errors of the failed check
+				m_ses.disk_thread().async_release_files(m_storage);
+				if (m_add_torrent_params)
+				{
+#if TORRENT_USE_ASSERTS
+					TORRENT_ASSERT(m_outstanding_check_files == false);
+					m_outstanding_check_files = true;
+#endif
+					m_ses.disk_thread().async_check_files(m_storage, m_add_torrent_params.get()
+						, {}, [self = shared_from_this()](status_t st, storage_error const& e)
+						{ self->on_resume_data_checked(st, e); });
+				}
+				else
+				{
+					m_ses.disk_thread().async_check_files(m_storage, nullptr
+						, {}, [self = shared_from_this()](status_t st, storage_error const& e)
+						{ self->on_force_recheck(st, e); });
+				}
+				m_ses.deferred_submit_jobs();
+			}
+		}
 		if (!checking_files && should_check_files())
 			start_checking();
 	}

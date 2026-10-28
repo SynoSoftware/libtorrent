@@ -77,6 +77,15 @@ namespace libtorrent { namespace aux {
 			{
 				err.clear();
 				create_directories(new_save_path, err);
+				check_storage_root(err, new_save_path);
+#ifdef TORRENT_WINDOWS
+				// a reset moves no files, so storage that does not answer gets
+				// the folder at the first write, and its check reports the error
+				if (err == error_code(ERROR_DEV_NOT_EXIST, system_category())
+					&& (flags == move_flags_t::reset_save_path
+						|| flags == move_flags_t::reset_save_path_unchecked))
+					err.clear();
+#endif
 				if (err)
 				{
 					ec.ec = err;
@@ -126,6 +135,9 @@ namespace libtorrent { namespace aux {
 			// volumes, the source should not be deleted until they've all been
 			// copied. That would let us rollback with higher confidence.
 			move_file(old_path, new_path, ec);
+			// either end can be the one that stopped answering
+			check_storage_root(ec.ec, save_path);
+			check_storage_root(ec.ec, new_save_path);
 
 			// if the source file doesn't exist. That's not a problem
 			// we just ignore that file
@@ -344,6 +356,7 @@ namespace libtorrent { namespace aux {
 		// recreate it instead of copying its content
 		file_status old_stat;
 		stat_file(old_name, &old_stat, ec.ec, dont_follow_links);
+		check_storage_root(ec.ec, save_path);
 		if (ec.ec == boost::system::errc::no_such_file_or_directory
 			|| ec.ec == boost::system::errc::filename_too_long)
 		{
@@ -393,6 +406,7 @@ namespace libtorrent { namespace aux {
 		}
 
 		rename(old_name, new_path, ec.ec);
+		check_storage_root(ec.ec, save_path);
 
 		// if old_name doesn't exist, that's not an error
 		// here. Once we start writing to the file, it will

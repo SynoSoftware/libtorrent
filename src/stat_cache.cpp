@@ -85,6 +85,7 @@ namespace libtorrent::aux {
 			stat_file(file_path, &s, ec);
 			if (ec)
 			{
+				check_storage_root(ec, save_path);
 				set_error_impl(i, ec);
 				sz = file_error;
 			}
