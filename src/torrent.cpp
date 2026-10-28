@@ -6717,13 +6717,11 @@ namespace {
 
 		if (m_graceful_pause_mode && m_connections.empty())
 		{
-			// we're in graceful pause mode and this was the last peer we
-			// disconnected. This will clear the graceful_pause_mode and post the
-			// torrent_paused_alert.
 			TORRENT_ASSERT(is_paused());
 
-			// this will post torrent_paused alert
-			set_paused(true);
+			// Finish graceful pausing and post torrent_paused_alert without
+			// changing the torrent's own pause flag.
+			set_paused(m_paused);
 		}
 
 		update_want_peers();
@@ -10394,34 +10392,38 @@ namespace {
 		if (num_peers() == 0)
 			flags &= ~torrent_handle::graceful_pause;
 
-		if (bool(m_paused) == b)
+		bool const paused_before = is_paused();
+		bool const changed = bool(m_paused) != b;
+		m_paused = b;
+
+		if (paused_before != is_paused())
 		{
-			// there is one special case here. If we are
-			// currently in graceful pause mode, and we just turned into regular
-			// paused mode, we need to actually pause the torrent properly
-			if (m_paused == true
-				&& m_graceful_pause_mode == true
-				&& !(flags & torrent_handle::graceful_pause))
-			{
-				m_graceful_pause_mode = false;
-				update_gauge();
-				do_pause();
-			}
+			m_graceful_pause_mode = bool(flags & torrent_handle::graceful_pause);
+			if (b) do_pause();
+			else do_resume();
 			return;
 		}
 
-		bool const paused_before = is_paused();
+		// Session pause can hide a change to the torrent's own pause flag.
+		if (changed)
+		{
+			update_want_tick();
+			update_want_scrape();
+			update_gauge();
+			state_updated();
+		}
 
-		m_paused = b;
-
-		// the session may still be paused, in which case
-		// the effective state of the torrent did not change
-		if (paused_before == is_paused()) return;
-
-		m_graceful_pause_mode = bool(flags & torrent_handle::graceful_pause);
-
-		if (b) do_pause();
-		else do_resume();
+		// A hard pause or the last peer's departure finishes graceful pausing
+		// even when the session keeps the effective pause state unchanged.
+		if (is_paused()
+			&& m_graceful_pause_mode
+			&& !(flags & torrent_handle::graceful_pause)
+			&& (b || num_peers() == 0))
+		{
+			m_graceful_pause_mode = false;
+			update_gauge();
+			do_pause();
+		}
 	}
 
 	void torrent::resume()
@@ -10435,7 +10437,6 @@ namespace {
 			&& m_announce_to_lsd) return;
 
 		m_paused = false;
-		if (!m_session_paused) m_graceful_pause_mode = false;
 
 		update_gauge();
 
@@ -10451,11 +10452,15 @@ namespace {
 		if (is_paused())
 		{
 			update_want_tick();
+			update_want_scrape();
+			state_updated();
 			return;
 		}
 
-		// is_paused() already reflects the new state (the caller cleared
-		// m_paused before calling us), so flush/re-anchor the timers now,
+		m_graceful_pause_mode = false;
+		update_gauge();
+
+		// is_paused() already reflects the new state, so flush/re-anchor timers now,
 		// regardless of whether an extension below defers the rest of the
 		// resume handling
 		update_state_timers();
