@@ -83,6 +83,13 @@ namespace libtorrent {
 	TORRENT_EXTRA_EXPORT void check_storage_root(error_code& ec
 		, std::string const& save_path);
 
+	// Names the drive or the server that holds ``save_path``, from the root
+	// that check_storage_root() finds, in lower case: "c:" or "\\server".
+	// Every share of a server has the server's name, because Windows keeps
+	// one connection to a server for all its shares. It is empty on other
+	// platforms. It reads only the path, never the disk.
+	TORRENT_EXTRA_EXPORT std::string storage_root_key(std::string const& save_path);
+
 	TORRENT_EXTRA_EXPORT void rename(std::string const& f
 		, std::string const& newf, error_code& ec);
 	TORRENT_EXTRA_EXPORT void create_directories(std::string const& f

@@ -47,6 +47,7 @@ see LICENSE file.
 #include "libtorrent/aux_/path.hpp"
 #include "libtorrent/aux_/string_util.hpp"
 #include <cstring>
+#include <cwctype> // for towlower
 #include <algorithm> // for std::replace
 #include <vector>
 
@@ -307,6 +308,58 @@ namespace {
 #endif // TORRENT_WINDOWS
 	}
 
+#ifdef TORRENT_WINDOWS
+namespace {
+
+	// where the drive or the server starts and ends in a native path such as
+	// \\?\C:\a, \\server\share\a or \\?\UNC\server\share\a
+	struct native_root
+	{
+		std::size_t prefix = 0;
+		// npos when nothing follows the drive or the server
+		std::size_t end = native_path_string::npos;
+		bool network = false;
+	};
+
+	native_root find_native_root(native_path_string const& native)
+	{
+		native_root ret;
+		if (native.compare(0, 8, L"\\\\?\\UNC\\") == 0)
+		{
+			ret.prefix = 8;
+			ret.network = true;
+		}
+		else if (native.compare(0, 4, L"\\\\?\\") == 0)
+		{
+			ret.prefix = 4;
+		}
+		else if (native.compare(0, 2, L"\\\\") == 0)
+		{
+			ret.prefix = 2;
+			ret.network = true;
+		}
+		ret.end = native.find(L'\\', ret.prefix);
+		return ret;
+	}
+}
+#endif
+
+	std::string storage_root_key(std::string const& save_path)
+	{
+#ifdef TORRENT_WINDOWS
+		native_path_string const native = convert_to_native_path_string(save_path);
+		native_root const root = find_native_root(native);
+		native_path_string key = root.network ? L"\\\\" : L"";
+		key += native.substr(root.prefix, root.end == native_path_string::npos
+			? native_path_string::npos : root.end - root.prefix);
+		for (auto& c : key) c = wchar_t(std::towlower(c));
+		return convert_from_native_path(key.c_str());
+#else
+		TORRENT_UNUSED(save_path);
+		return {};
+#endif
+	}
+
 	void check_storage_root(error_code& ec, std::string const& save_path)
 	{
 #ifdef TORRENT_WINDOWS
@@ -315,24 +368,9 @@ namespace {
 		// the root is \\?\C:\ or \\server\share\ or \\?\UNC\server\share\.
 		native_path_string const native = convert_to_native_path_string(save_path);
 		native_path_string root = native;
-		std::size_t prefix = 0;
-		bool network = false;
-		if (root.compare(0, 8, L"\\\\?\\UNC\\") == 0)
-		{
-			prefix = 8;
-			network = true;
-		}
-		else if (root.compare(0, 4, L"\\\\?\\") == 0)
-		{
-			prefix = 4;
-		}
-		else if (root.compare(0, 2, L"\\\\") == 0)
-		{
-			prefix = 2;
-			network = true;
-		}
-		std::size_t end = root.find(L'\\', prefix);
-		if (network && end != native_path_string::npos)
+		native_root const parts = find_native_root(native);
+		std::size_t end = parts.end;
+		if (parts.network && end != native_path_string::npos)
 			end = root.find(L'\\', end + 1);
 		if (end == native_path_string::npos)
 			root += L'\\';

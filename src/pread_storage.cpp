@@ -48,7 +48,7 @@ namespace libtorrent::aux {
 		, m_save_path(complete(params.path))
 		, m_part_file_dir(params.part_file_dir)
 		, m_part_file_name("." + to_hex(params.info_hash) + ".parts")
-		, m_pool(pool)
+		, m_pool(&pool)
 		, m_allocate_files(params.mode == storage_mode_allocate)
 		, m_v1(params.v1)
 		, m_v2(params.v2)
@@ -65,7 +65,7 @@ namespace libtorrent::aux {
 
 		// this may be called from a different
 		// thread than the disk thread
-		m_pool.release(storage_index());
+		m_pool->release(storage_index());
 	}
 
 	filenames pread_storage::names() const
@@ -299,7 +299,7 @@ namespace libtorrent::aux {
 			, ec);
 
 		// close files that were opened in write mode
-		m_pool.release(storage_index());
+		m_pool->release(storage_index());
 		return ret;
 	}
 
@@ -336,7 +336,7 @@ namespace libtorrent::aux {
 	{
 		TORRENT_ASSERT(index >= file_index_t(0));
 		TORRENT_ASSERT(index < files().end_file());
-		m_pool.release(storage_index(), index);
+		m_pool->release(storage_index(), index);
 		aux::rename_file(files(), m_renamed_files, index, new_filename, m_save_path, ec);
 	}
 
@@ -349,7 +349,7 @@ namespace libtorrent::aux {
 		}
 
 		// make sure we don't have the files open
-		m_pool.release(storage_index());
+		m_pool->release(storage_index());
 
 		// make sure we can pick up new files added to the download directory when
 		// we start the torrent again
@@ -359,7 +359,7 @@ namespace libtorrent::aux {
 	void pread_storage::delete_files(remove_flags_t const options, storage_error& ec)
 	{
 		// make sure we don't have the files open
-		m_pool.release(storage_index());
+		m_pool->release(storage_index());
 
 		// if there's a part file open, make sure to destruct it to have it
 		// release the underlying part file. Otherwise we may not be able to
@@ -387,7 +387,7 @@ namespace libtorrent::aux {
 	std::pair<status_t, std::string> pread_storage::move_storage(std::string save_path
 		, move_flags_t const flags, storage_error& ec)
 	{
-		m_pool.release(storage_index());
+		m_pool->release(storage_index());
 
 		status_t ret{};
 		auto move_partfile = [&](std::string const& new_save_path, error_code& e)
@@ -808,7 +808,7 @@ namespace libtorrent::aux {
 #if TORRENT_HAVE_MAP_VIEW_OF_FILE
 			int dummy = 0;
 #endif
-			return m_pool.open_file(storage_index(), m_save_path, file
+			return m_pool->open_file(storage_index(), m_save_path, file
 				, names(), mode
 #if TORRENT_HAVE_MAP_VIEW_OF_FILE
 				, &dummy

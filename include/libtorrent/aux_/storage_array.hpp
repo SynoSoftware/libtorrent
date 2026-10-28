@@ -43,6 +43,11 @@ struct storage_array
 		return m_torrents[idx];
 	}
 
+	std::shared_ptr<Storage> const& operator[](storage_index_t const idx) const
+	{
+		return m_torrents[idx];
+	}
+
 	bool empty() const { return m_torrents.size() == m_free_slots.size(); }
 
 	// the number of slots ever allocated (it never shrinks; freed indices are

@@ -184,6 +184,50 @@ Not yet built or tested: TinyTorrent builds the dependencies separately, and
 the change awaits that build and a manual check with a share that is
 disconnected and reconnected.
 
+Disk work per drive
+-------------------
+
+``pread_disk_io`` ran every torrent's disk jobs on one generic and one hash
+thread pool, with one write cache and one file pool. A read or write on a
+share that does not answer blocks its thread, and once such jobs held every
+thread, no torrent on any drive could read, write, check, release, rename or
+move.
+
+The fork gives each drive or server its own threads, cache and open files, so
+a share that hangs holds up only the work on that share:
+
+* ``storage_root_key()`` names the drive (``c:``) or the server
+  (``\\server``) of a save path, from the root that ``check_storage_root()``
+  finds, with the same code. All shares of a server have one root, because
+  Windows keeps one connection to a server. It reads only the path, so a
+  folder that links to another drive counts under its own letter. On other
+  platforms every storage has the same root.
+* ``pread_disk_io`` creates a root when a storage first needs it and keeps it
+  until it is destructed. Each root has a generic and a hash thread pool with
+  ``aio_threads`` and ``hashing_threads`` threads, a write cache of
+  ``max_queued_disk_bytes`` with its own back pressure, and a file pool of
+  ``file_pool_size`` files. Idle threads end after 60 seconds, as before,
+  down to one thread per pool, which wakes for flushes.
+* A storage's jobs, cache flushes, fence flushes, hasher kicks, ticks and
+  file closes run on its root's threads, and a file pool closes only its own
+  root's files to make room. ``move_storage`` runs on the root of its source.
+  When it changes the save path's root, the storage moves to the new root:
+  its pieces, already flushed, leave the old root's cache, and a hash queued
+  on one of them is queued again behind the move.
+* After an abort, the last thread of each root flushes that root's cache,
+  and the last thread of all closes the files.
+
+The fence and flush rules are unchanged. A fence that waits for a storage's
+cache writes queues the storage for a flush on the root whose cache holds
+them. A move changes a storage's root under the job mutex, the same mutex
+that guards the flush queues, and takes the storage off the old root's queue,
+so a fence behind the move queues its flush on the new root.
+
+``test_disk_io`` covers both: ``pread_disk_io_blocked_root`` writes, hashes,
+releases and reads a storage while a read on another root waits on a named
+pipe, and ``pread_disk_io_move_to_other_root`` moves a storage with a piece
+half written to another root and completes the piece there.
+
 Maintenance
 -----------
 

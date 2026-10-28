@@ -27,6 +27,11 @@ see LICENSE file.
 #include "libtorrent/aux_/time.hpp"
 #include "libtorrent/sha1_hash.hpp"
 #include "libtorrent/hasher.hpp"
+#include "libtorrent/aux_/path.hpp" // for storage_root_key
+
+#ifdef TORRENT_WINDOWS
+#include "libtorrent/aux_/windows.hpp"
+#endif
 
 using namespace std::chrono_literals;
 
@@ -887,3 +892,223 @@ TORRENT_TEST_DISK_IO(test_pread_disk_io_stacked_fence)
 {
 	disk_io_test_suite(disk_io, 3, false, true);
 }
+
+#ifdef TORRENT_WINDOWS
+namespace {
+
+// runs the handlers until done() or the timeout, and returns done()
+template <typename Done>
+bool run_until(lt::io_context& ios, Done done, lt::seconds const timeout = lt::seconds(10))
+{
+	auto const start = lt::aux::time_now();
+	while (!done() && lt::aux::time_now() - start < timeout)
+		ios.run_for(5ms);
+	return done();
+}
+
+lt::sha1_hash sha1_of(std::vector<char> const& data)
+{
+	lt::hasher h;
+	h.update(data);
+	return h.final();
+}
+
+}
+
+// pread_disk_io keeps threads per drive or server, so a job that blocks on
+// one does not stop the jobs on another. Storage A's file is a named pipe,
+// whose reads block until this test writes to it, like a share that stops
+// answering. Storage B is a folder on the local drive. With one generic
+// thread per root, B writes, hashes, releases and reads while A's read waits.
+TORRENT_TEST(pread_disk_io_blocked_root)
+{
+	lt::io_context ios;
+	lt::counters cnt;
+	lt::settings_pack sett = lt::default_settings();
+	sett.set_int(lt::settings_pack::aio_threads, 1);
+	sett.set_int(lt::settings_pack::hashing_threads, 1);
+	std::unique_ptr<lt::disk_interface> disk = lt::pread_disk_io_constructor(ios, sett, cnt);
+
+	int const size = lt::default_block_size;
+	lt::file_storage fs;
+	fs.set_piece_length(size);
+	fs.add_file("blocked_root/file", size, {});
+	fs.set_num_pieces(1);
+	std::vector<char> const data = generate_piece(lt::piece_index_t{0}, size);
+
+	// the pipe has the path of A's file, and FILE_FLAG_OVERLAPPED lets the
+	// test give up waiting on it
+	HANDLE const pipe = CreateNamedPipeW(L"\\\\.\\pipe\\blocked_root\\file"
+		, PIPE_ACCESS_OUTBOUND | FILE_FLAG_OVERLAPPED, PIPE_TYPE_BYTE | PIPE_WAIT
+		, 1, DWORD(size), 0, 0, nullptr);
+	TEST_CHECK(pipe != INVALID_HANDLE_VALUE);
+	if (pipe == INVALID_HANDLE_VALUE) return;
+	HANDLE const event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+
+	lt::storage_holder a = add_test_torrent(*disk, fs, "\\\\.\\pipe", true, false);
+	lt::storage_holder b = add_test_torrent(*disk, fs, "blocked_root_b", true, false);
+
+	bool a_read = false;
+	disk->async_read(a, lt::peer_request{lt::piece_index_t{0}, 0, size}
+		, [&](lt::disk_buffer_holder buf, lt::storage_error const& e)
+		{
+			TEST_CHECK(!e.ec);
+			TEST_CHECK(buf && std::memcmp(buf.data(), data.data(), std::size_t(size)) == 0);
+			a_read = true;
+		});
+	disk->submit_jobs();
+
+	// A's read opens the pipe, then waits for data on its root's only
+	// generic thread
+	OVERLAPPED connect{};
+	connect.hEvent = event;
+	bool const connected = ConnectNamedPipe(pipe, &connect)
+		|| GetLastError() == ERROR_PIPE_CONNECTED
+		|| (GetLastError() == ERROR_IO_PENDING
+			&& WaitForSingleObject(event, 10000) == WAIT_OBJECT_0);
+	TEST_CHECK(connected);
+
+	int b_done = 0;
+	disk->async_write(b, lt::peer_request{lt::piece_index_t{0}, 0, size}, data.data()
+		, std::shared_ptr<lt::disk_observer>()
+		, [&](lt::storage_error const& e) { TEST_CHECK(!e.ec); ++b_done; }
+		, lt::disk_interface::flush_piece);
+	disk->async_hash(b, lt::piece_index_t{0}, {}
+		, lt::disk_interface::v1_hash | lt::disk_interface::flush_piece
+		, [&](lt::piece_index_t, lt::sha1_hash const& h, lt::storage_error const& e)
+		{
+			TEST_CHECK(!e.ec);
+			TEST_CHECK(h == sha1_of(data));
+			++b_done;
+		});
+	// a fence, so the read below comes from the disk
+	disk->async_release_files(b, [&] { ++b_done; });
+	disk->async_read(b, lt::peer_request{lt::piece_index_t{0}, 0, size}
+		, [&](lt::disk_buffer_holder buf, lt::storage_error const& e)
+		{
+			TEST_CHECK(!e.ec);
+			TEST_CHECK(buf && std::memcmp(buf.data(), data.data(), std::size_t(size)) == 0);
+			++b_done;
+		});
+	disk->submit_jobs();
+
+	TEST_CHECK(run_until(ios, [&] { return b_done == 4; }));
+	TEST_EQUAL(b_done, 4);
+	TEST_CHECK(!a_read);
+
+	// A answers again
+	if (connected)
+	{
+		OVERLAPPED write{};
+		write.hEvent = event;
+		ResetEvent(event);
+		DWORD written = 0;
+		bool const sent = WriteFile(pipe, data.data(), DWORD(size), &written, &write)
+			|| (GetLastError() == ERROR_IO_PENDING
+				&& GetOverlappedResult(pipe, &write, &written, TRUE));
+		TEST_CHECK(sent);
+		TEST_CHECK(run_until(ios, [&] { return a_read; }));
+	}
+
+	disk->abort(true);
+	CloseHandle(event);
+	CloseHandle(pipe);
+}
+
+// a move to another drive or server moves the storage to that root: the
+// writes and hashes after the move use the new root's cache and threads,
+// and a piece half written before the move completes there. The \\.\ form
+// of the working directory names the same folder as another root.
+TORRENT_TEST(pread_disk_io_move_to_other_root)
+{
+	lt::io_context ios;
+	lt::counters cnt;
+	lt::settings_pack sett = lt::default_settings();
+	sett.set_int(lt::settings_pack::aio_threads, 2);
+	sett.set_int(lt::settings_pack::hashing_threads, 2);
+	std::unique_ptr<lt::disk_interface> disk = lt::pread_disk_io_constructor(ios, sett, cnt);
+
+	int const block = lt::default_block_size;
+	int const piece_size = 2 * block;
+	lt::file_storage fs;
+	fs.set_piece_length(piece_size);
+	fs.add_file("move_root/file", 2 * piece_size, {});
+	fs.set_num_pieces(2);
+	std::vector<char> const piece0 = generate_piece(lt::piece_index_t{0}, piece_size);
+	std::vector<char> const piece1 = generate_piece(lt::piece_index_t{1}, piece_size);
+
+	std::string const destination = "\\\\.\\"
+		+ lt::combine_path(lt::current_working_directory(), "move_root_b");
+	TEST_CHECK(lt::storage_root_key(destination) != lt::storage_root_key("move_root_a"));
+
+	lt::storage_holder st = add_test_torrent(*disk, fs, "move_root_a", true, false);
+
+	int writes = 0;
+	int hashes = 0;
+	auto const write = [&](lt::piece_index_t const p, int const offset, char const* buf)
+	{
+		disk->async_write(st, lt::peer_request{p, offset, block}, buf
+			, std::shared_ptr<lt::disk_observer>()
+			, [&](lt::storage_error const& e) { TEST_CHECK(!e.ec); ++writes; });
+	};
+	auto const hash = [&](lt::piece_index_t const p, std::vector<char> const& data)
+	{
+		// flush_piece, as the session asks, so the piece's last write is
+		// flushed and completes
+		disk->async_hash(st, p, {}, lt::disk_interface::v1_hash | lt::disk_interface::flush_piece
+			, [&, expected = sha1_of(data)](lt::piece_index_t, lt::sha1_hash const& h
+				, lt::storage_error const& e)
+			{
+				TEST_CHECK(!e.ec);
+				TEST_CHECK(h == expected);
+				++hashes;
+			});
+	};
+
+	// piece 0 complete, and the first half of piece 1, before the move
+	write(lt::piece_index_t{0}, 0, piece0.data());
+	write(lt::piece_index_t{0}, block, piece0.data() + block);
+	hash(lt::piece_index_t{0}, piece0);
+	write(lt::piece_index_t{1}, 0, piece1.data());
+	disk->submit_jobs();
+
+	bool moved = false;
+	disk->async_move_storage(st, destination, lt::move_flags_t::always_replace_files
+		, [&](lt::status_t, std::string const& path, lt::storage_error const& e)
+		{
+			TEST_CHECK(!e.ec);
+			TEST_EQUAL(path, destination);
+			moved = true;
+		});
+
+	// queued behind the move
+	write(lt::piece_index_t{1}, block, piece1.data() + block);
+	hash(lt::piece_index_t{1}, piece1);
+	int reads = 0;
+	disk->async_read(st, lt::peer_request{lt::piece_index_t{1}, 0, block}
+		, [&](lt::disk_buffer_holder buf, lt::storage_error const& e)
+		{
+			TEST_CHECK(!e.ec);
+			TEST_CHECK(buf && std::memcmp(buf.data(), piece1.data(), std::size_t(block)) == 0);
+			++reads;
+		});
+	disk->submit_jobs();
+
+	TEST_CHECK(run_until(ios, [&] { return moved && writes == 4 && hashes == 2 && reads == 1; }));
+	TEST_CHECK(moved);
+	TEST_EQUAL(writes, 4);
+	TEST_EQUAL(hashes, 2);
+	TEST_EQUAL(reads, 1);
+
+	bool released = false;
+	disk->async_release_files(st, [&] { released = true; });
+	disk->submit_jobs();
+	TEST_CHECK(run_until(ios, [&] { return released; }));
+
+	lt::error_code ec;
+	TEST_CHECK(lt::exists(lt::combine_path("move_root_b", lt::combine_path("move_root", "file")), ec));
+	TEST_CHECK(!lt::exists(lt::combine_path("move_root_a", lt::combine_path("move_root", "file")), ec));
+
+	disk->abort(true);
+}
+#endif

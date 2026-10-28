@@ -12,6 +12,7 @@ see LICENSE file.
 
 #include "libtorrent/config.hpp"
 
+#include <atomic>
 #include <mutex>
 #include <memory>
 #include <optional>
@@ -33,6 +34,7 @@ namespace libtorrent::aux {
 
 	struct session_settings;
 	struct file_view;
+	struct disk_root;
 
 	struct TORRENT_EXTRA_EXPORT pread_storage
 		: std::enable_shared_from_this<pread_storage>
@@ -116,6 +118,21 @@ namespace libtorrent::aux {
 		bool in_fence_flush() const { return m_in_fence_flush; }
 		void set_in_fence_flush(bool const b) { m_in_fence_flush = b; }
 
+		// the root of pread_disk_io that serves this storage: its threads run
+		// the storage's jobs, its cache holds the storage's writes and its
+		// file pool the storage's files. Null until pread_disk_io sets it. Any
+		// thread may read it.
+		disk_root* root() const { return m_root.load(std::memory_order_acquire); }
+
+		// ``files`` is the file pool of ``r``. Only pread_disk_io calls this,
+		// when it adds the storage and from the storage's move job, which runs
+		// alone on the storage after closing its files.
+		void set_root(disk_root& r, file_pool& files)
+		{
+			m_pool = &files;
+			m_root.store(&r, std::memory_order_release);
+		}
+
 		bool v1() const { return m_v1; }
 		bool v2() const { return m_v2; }
 
@@ -148,6 +165,9 @@ namespace libtorrent::aux {
 
 		// see in_fence_flush()
 		bool m_in_fence_flush = false;
+
+		// see root()
+		std::atomic<disk_root*> m_root{nullptr};
 
 		void need_partfile();
 
@@ -184,9 +204,9 @@ namespace libtorrent::aux {
 		// entry set to false, and only indices up to that entry.
 		aux::vector<bool, file_index_t> m_use_partfile;
 
-		// the file pool is a member of the disk_io_thread
-		// to make all storage instances share the pool
-		aux::file_pool& m_pool;
+		// the file pool of the storage's root (see set_root()), which the
+		// storages on that root share
+		aux::file_pool* m_pool;
 
 		// used for skipped files
 		std::unique_ptr<part_file> m_part_file;
