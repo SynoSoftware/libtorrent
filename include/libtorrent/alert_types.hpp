@@ -3183,7 +3183,7 @@ struct TORRENT_EXPORT oversized_file_alert final : torrent_alert
 	{
 		// internal
 		TORRENT_UNEXPORT peer_info_alert(aux::stack_allocator& alloc, torrent_handle h
-			, std::vector<lt::peer_info> p);
+			, std::vector<lt::peer_info> p, std::vector<known_peer> known = {});
 		TORRENT_DEFINE_ALERT_PRIO(peer_info_alert, 100, alert_priority::critical)
 
 		static constexpr alert_category_t static_category = alert_category::status;
@@ -3191,6 +3191,10 @@ struct TORRENT_EXPORT oversized_file_alert final : torrent_alert
 
 		// the list of the currently connected peers
 		std::vector<lt::peer_info> peer_info;
+
+		// All retained IP peers, including disconnected and banned peers, when
+		// requested. Collected on the same session thread turn as peer_info.
+		std::vector<known_peer> known_peers;
 	};
 
 	// posted when torrent_handle::post_file_progress() is called

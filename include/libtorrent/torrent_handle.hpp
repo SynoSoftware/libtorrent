@@ -343,7 +343,9 @@ namespace aux {
 		// connected to this torrent, given the handle is valid. Each entry in
 		// the vector contains information about that particular peer. See
 		// peer_info.
-		void post_peer_info() const;
+		// include_known also snapshots every retained IP address in the alert's
+		// known_peers field. It does not initiate connections or discovery.
+		void post_peer_info(bool include_known = false) const;
 		void get_peer_info(std::vector<peer_info>& v) const;
 
 		// calculates ``distributed_copies``, ``distributed_full_copies`` and

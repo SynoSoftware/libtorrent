@@ -16,6 +16,22 @@ revision and retain it across upstream updates. It is based on upstream
 ``Synapse/TinyTorrent``. The pause correction changes only ``src/torrent.cpp``.
 No upstream pull request is planned.
 
+Known peer snapshots
+--------------------
+
+``torrent_handle::post_peer_info(true)`` includes ``known_peers`` in the usual
+``peer_info_alert``. Each entry contains an IP endpoint, discovery sources and
+the retained confirmed-seed flag. False does not prove that a peer is a leecher.
+The collection includes disconnected and banned IP peers; I2P and RTC destinations
+have no geographic IP location and are excluded. Live connections retain their
+existing detailed records, including non-IP connections.
+
+Both lists are copied on the session thread in the same callback. The optional
+scan is linear in the retained list and does not connect, discover, or keep a
+second peer store. The default call does not scan the known list. TinyTorrent
+requests it only for the visible Peers inspector. All clients must be rebuilt
+against the matching headers and library because the alert layout changed.
+
 Confirmed reproduction
 ----------------------
 

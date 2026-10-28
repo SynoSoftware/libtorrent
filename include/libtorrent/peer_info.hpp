@@ -45,6 +45,15 @@ namespace libtorrent {
 
 TORRENT_VERSION_NAMESPACE_4
 
+	// An IP peer retained by the torrent, whether connected or not. A false
+	// seed flag means its completeness is unknown, not that it is a leecher.
+	struct TORRENT_EXPORT known_peer
+	{
+		tcp::endpoint endpoint;
+		peer_source_flags_t source;
+		bool seed = false;
+	};
+
 	// holds information and statistics about one peer
 	// that libtorrent is connected to
 	struct TORRENT_EXPORT peer_info
